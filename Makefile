@@ -55,11 +55,9 @@ lint: golangci-lint ## Run golangci linter
 
 tidy: ## Update dependencies
 	$(Q)go mod tidy
-	$(Q)(cd $(TOOLS_DIR) && go mod tidy)
 
 fmt: ## Format Go code
 	$(Q)go fmt ./...
-	$(Q)(cd $(TOOLS_DIR) && go fmt $$(go list -tags=tools ./...))
 
 clean: ## Remove binaries and test artifacts
 	@rm -rf bin
@@ -102,7 +100,7 @@ kind-cluster: kind kind-cluster-cleanup ## Standup a kind cluster
 kind-cluster-cleanup: kind ## Delete the kind cluster
 	$(KIND) delete cluster --name ${KIND_CLUSTER_NAME}
 
-image-registry: ## Setup in-cluster image registry 
+image-registry: ## Setup in-cluster image registry
 	./tools/imageregistry/setup_imageregistry.sh ${KIND_CLUSTER_NAME}
 
 ###################
@@ -214,37 +212,56 @@ quickstart: generate ## Generate the installation release manifests
 ################
 # Hack / Tools #
 ################
-TOOLS_DIR := hack/tools
-TOOLS_BIN_DIR := $(TOOLS_DIR)/bin
 
-##@ hack/tools:
+## Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
 
-.PHONY: golangci-lint ginkgo controller-gen goreleaser kind
+## Tool Binaries
+KUSTOMIZE ?= $(LOCALBIN)/kustomize
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+ENVTEST ?= $(LOCALBIN)/setup-envtest
+GINKGO ?= $(LOCALBIN)/ginkgo
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+KIND ?= $(LOCALBIN)/kind
 
-GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/golangci-lint)
-GINKGO := $(abspath $(TOOLS_BIN_DIR)/ginkgo)
-CONTROLLER_GEN := $(abspath $(TOOLS_BIN_DIR)/controller-gen)
-SETUP_ENVTEST := $(abspath $(TOOLS_BIN_DIR)/setup-envtest)
-GORELEASER := $(abspath $(TOOLS_BIN_DIR)/goreleaser)
-KIND := $(abspath $(TOOLS_BIN_DIR)/kind)
+## Tool Versions
+KUSTOMIZE_VERSION ?= v3.8.7
+CONTROLLER_TOOLS_VERSION ?= v0.9.0
+SETUP_ENVTEST_VERSION ?= latest
+GINKGO_VERSION ?= v2.1.4
+GOLANGCI_LINT_VERSION ?= v1.45.2
+KIND_VERSION ?= v0.14.0
 
-controller-gen: $(CONTROLLER_GEN) ## Build a local copy of controller-gen
-ginkgo: $(GINKGO) ## Build a local copy of ginkgo
-golangci-lint: $(GOLANGCI_LINT) ## Build a local copy of golangci-lint
-setup-envtest: $(SETUP_ENVTEST) ## Build a local copy of envtest
-goreleaser: $(GORELEASER) ## Builds a local copy of goreleaser
-kind: $(KIND) ## Builds a local copy of kind
+KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
+.PHONY: kustomize
+kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
+$(KUSTOMIZE): $(LOCALBIN)
+	rm -f $(KUSTOMIZE)
+	curl -s $(KUSTOMIZE_INSTALL_SCRIPT) | bash -s -- $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN)
 
-$(CONTROLLER_GEN): $(TOOLS_DIR)/go.mod # Build controller-gen from tools folder.
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/controller-gen sigs.k8s.io/controller-tools/cmd/controller-gen
-$(GINKGO): $(TOOLS_DIR)/go.mod # Build ginkgo from tools folder.
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/ginkgo github.com/onsi/ginkgo/v2/ginkgo
-$(GOLANGCI_LINT): $(TOOLS_DIR)/go.mod # Build golangci-lint from tools folder.
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint
-$(SETUP_ENVTEST): $(TOOLS_DIR)/go.mod # Build setup-envtest from tools folder.
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/setup-envtest sigs.k8s.io/controller-runtime/tools/setup-envtest
-$(GORELEASER): $(TOOLS_DIR)/go.mod # Build goreleaser from tools folder.
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/goreleaser github.com/goreleaser/goreleaser
-$(KIND): $(TOOLS_DIR)/go.mod
-	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/kind sigs.k8s.io/kind
+.PHONY: controller-gen
+controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
+$(CONTROLLER_GEN): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+
+.PHONY: ginkgo
+ginkgo: $(GINKGO)
+$(GINKGO): $(LOCALBIN) ## Download ginkgo locally if necessary.
+	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/v2/ginkgo@$(GINKGO_VERSION)
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT)
+$(GOLANGCI_LINT): $(LOCALBIN) ## Download golangci-lint locally if necessary.
+	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: kind
+kind: $(KIND) ## Download kind locally if necessary.
+$(KIND): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind@$(KIND_VERSION)
