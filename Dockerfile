@@ -1,8 +1,5 @@
 FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.18-openshift-4.12 AS builder
 
-ENV GO111MODULE=on
-ENV GOFLAGS=-mod=vendor
-
 # copy just enough of the git repo to parse HEAD, used to record version in OLM binaries
 COPY .git/HEAD .git/HEAD
 COPY .git/refs/heads/. .git/refs/heads
