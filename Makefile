@@ -83,10 +83,14 @@ verify: tidy fmt generate ## Verify the current code generation and lint
 
 test: test-unit test-e2e ## Run the tests
 
+.PHONY: setup-envtest
+setup-envtest: envtest
+	$(eval KUBEBUILDER_ASSETS := "$(shell $(ENVTEST) use $(ENVTEST_VERSION) -p path --bin-dir $(LOCALBIN))")
+
 ENVTEST_VERSION = $(shell go list -m k8s.io/client-go | cut -d" " -f2 | sed 's/^v0\.\([[:digit:]]\{1,\}\)\.[[:digit:]]\{1,\}$$/1.\1.x/')
 UNIT_TEST_DIRS=$(shell go list ./... | grep -v /test/)
 test-unit: setup-envtest ## Run the unit tests
-	eval $$($(SETUP_ENVTEST) use -p env $(ENVTEST_VERSION)) && go test -count=1 -short $(UNIT_TEST_DIRS)
+	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test -count=1 -short $(UNIT_TEST_DIRS)
 
 FOCUS := $(if $(TEST),-v -focus "$(TEST)")
 test-e2e: ginkgo ## Run the e2e tests
