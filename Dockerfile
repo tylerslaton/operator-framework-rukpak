@@ -11,11 +11,11 @@ RUN make build
 
 FROM registry.ci.openshift.org/ocp/4.12:base
 
-COPY --from=builder /build/bin/plain /bin
-COPY --from=builder /build/bin/registry /bin
-COPY --from=builder /build/bin/unpack /bin
-COPY --from=builder /build/bin/core /bin
-COPY --from=builder /build/bin/crdvalidator /bin
+COPY --from=builder /build/bin/plain /
+COPY --from=builder /build/bin/registry /
+COPY --from=builder /build/bin/unpack /
+COPY --from=builder /build/bin/core /
+COPY --from=builder /build/bin/crdvalidator /
 USER 1001
 
 LABEL io.k8s.display-name="OpenShift RukPak" \

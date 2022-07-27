@@ -21,6 +21,7 @@ REGISTRY_NAMESPACE=rukpak-e2e
 DNS_NAME=$(REGISTRY_NAME).$(REGISTRY_NAMESPACE).svc.cluster.local
 
 CONTAINER_RUNTIME ?= docker
+CLUSTER_MANAGER ?= kubectl
 
 # kernel-style V=1 build verbosity
 ifeq ("$(origin V)", "command line")
@@ -78,7 +79,7 @@ verify: tidy fmt generate ## Verify the current code generation and lint
 ###########
 # Testing #
 ###########
-.PHONY: test test-unit test-e2e image-registry
+.PHONY: test test-unit test-e2e image-registry e2e-local
 
 ##@ testing:
 
@@ -97,9 +98,9 @@ FOCUS := $(if $(TEST),-v -focus "$(TEST)")
 test-e2e: ginkgo ## Run the e2e tests
 	$(GINKGO) -trace -progress $(FOCUS) test/e2e
 
-e2e: KIND_CLUSTER_NAME=rukpak-e2e
-e2e: run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
-
+e2e-local: KIND_CLUSTER_NAME=rukpak-e2e
+e2e-local: run image-registry kind-load-bundles registry-load-bundles test-e2e ## Run e2e tests against an ephemeral kind cluster
+	
 kind-cluster: kind kind-cluster-cleanup ## Standup a kind cluster
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KIND) export kubeconfig --name ${KIND_CLUSTER_NAME}
@@ -108,7 +109,23 @@ kind-cluster-cleanup: kind ## Delete the kind cluster
 	$(KIND) delete cluster --name ${KIND_CLUSTER_NAME}
 
 image-registry: ## Setup in-cluster image registry
+	export 
 	./tools/imageregistry/setup_imageregistry.sh ${KIND_CLUSTER_NAME}
+
+##############
+# CI Targets #
+##############
+
+.PHONY: ci-update-image e2e
+
+# WARNING: These targets should only be run by CI.
+
+ci-update-image:
+	env
+	grep -rl $(IMAGE) manifests | xargs sed -i 's#$(IMAGE)#$(OLM_RUKPAK_IMAGE)#g'
+
+e2e: CLUSTER_MANAGER=oc
+e2e: ci-update-image install test-e2e
 
 ###################
 # Install and Run #
@@ -120,22 +137,22 @@ image-registry: ## Setup in-cluster image registry
 install: generate cert-mgr install-manifests wait ## Install rukpak
 
 install-manifests:
-	kubectl apply -k manifests
+	$(CLUSTER_MANAGER) apply -k manifests
 
 wait:
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/plain-provisioner --timeout=60s
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/registry-provisioner --timeout=60s
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-core-webhook --timeout=60s
-	kubectl wait --for=condition=Available --namespace=crdvalidator-system deployment/crd-validation-webhook --timeout=60s
+	$(CLUSTER_MANAGER) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/plain-provisioner --timeout=60s
+	$(CLUSTER_MANAGER) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/registry-provisioner --timeout=60s
+	$(CLUSTER_MANAGER) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-core-webhook --timeout=60s
+	$(CLUSTER_MANAGER) wait --for=condition=Available --namespace=crdvalidator-system deployment/crd-validation-webhook --timeout=60s
 
-run: build-container kind-cluster kind-load install ## Build image, stop/start a local kind cluster, and run operator in that cluster
+run: build-container kind-load install ## Build image, stop/start a local kind cluster, and run operator in that cluster
 
 cert-mgr: ## Install the certification manager
-	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MGR_VERSION)/cert-manager.yaml
-	kubectl wait --for=condition=Available --namespace=cert-manager deployment/cert-manager-webhook --timeout=60s
+	$(CLUSTER_MANAGER) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MGR_VERSION)/cert-manager.yaml
+	$(CLUSTER_MANAGER) wait --for=condition=Available --namespace=cert-manager deployment/cert-manager-webhook --timeout=60s
 
 uninstall: ## Remove all rukpak resources from the cluster
-	kubectl delete -k manifests
+	$(CLUSTER_MANAGER) delete -k manifests
 
 ##################
 # Build and Load #
@@ -214,7 +231,7 @@ release: goreleaser substitute ## Run goreleaser
 
 quickstart: VERSION ?= $(shell git describe --abbrev=0 --tags)
 quickstart: generate ## Generate the installation release manifests
-	kubectl kustomize manifests | sed "s/:latest/:$(VERSION)/g" > rukpak.yaml
+	$(CLUSTER_MANAGER) kustomize manifests | sed "s/:latest/:$(VERSION)/g" > rukpak.yaml
 
 ################
 # Hack / Tools #
