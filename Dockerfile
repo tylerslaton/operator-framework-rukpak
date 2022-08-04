@@ -23,3 +23,4 @@ LABEL io.k8s.display-name="OpenShift RukPak" \
       io.openshift.tags="openshift" \
       summary="This is a component of OpenShift Container Platform and manages the lifecycle of operators." \
       maintainer="Odin Team <aos-odin@redhat.com>"
+
