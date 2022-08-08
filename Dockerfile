@@ -11,10 +11,9 @@ RUN make build
 
 FROM registry.ci.openshift.org/ocp/4.12:base
 
-COPY --from=builder /build/bin/plain /bin
-COPY --from=builder /build/bin/registry /bin
-COPY --from=builder /build/bin/unpack /bin
 COPY --from=builder /build/bin/core /bin
+COPY --from=builder /build/bin/unpack /bin
+COPY --from=builder /build/bin/webhooks /bin
 COPY --from=builder /build/bin/crdvalidator /bin
 USER 1001
 
