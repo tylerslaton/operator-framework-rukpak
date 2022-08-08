@@ -2,13 +2,22 @@ package source
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	rukpakv1alpha1 "github.com/operator-framework/rukpak/api/v1alpha1"
+)
+
+const (
+	// uploadClientTimeout is the timeout to be used with http connections to upload manager.
+	uploadClientTimeout = time.Second * 10
 )
 
 // Unpacker unpacks bundle content, either synchronously or asynchronously and
@@ -90,19 +99,25 @@ func (s *unpacker) Unpack(ctx context.Context, bundle *rukpakv1alpha1.Bundle) (*
 // NewDefaultUnpacker returns a new composite Source that unpacks bundles using
 // a default source mapping with built-in implementations of all of the supported
 // source types.
-func NewDefaultUnpacker(mgr ctrl.Manager, namespace, provisionerName, unpackImage string) (Unpacker, error) {
+//
+// TODO: refactor NewDefaultUnpacker due to growing parameter list
+func NewDefaultUnpacker(mgr ctrl.Manager, namespace, unpackImage string, baseUploadManagerURL string, rootCAs *x509.CertPool) (Unpacker, error) {
 	cfg := mgr.GetConfig()
 	kubeClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
+	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+	if httpTransport.TLSClientConfig == nil {
+		httpTransport.TLSClientConfig = &tls.Config{}
+	}
+	httpTransport.TLSClientConfig.RootCAs = rootCAs
 	return NewUnpacker(map[rukpakv1alpha1.SourceType]Unpacker{
 		rukpakv1alpha1.SourceTypeImage: &Image{
-			Client:          mgr.GetClient(),
-			KubeClient:      kubeClient,
-			ProvisionerName: provisionerName,
-			PodNamespace:    namespace,
-			UnpackImage:     unpackImage,
+			Client:       mgr.GetClient(),
+			KubeClient:   kubeClient,
+			PodNamespace: namespace,
+			UnpackImage:  unpackImage,
 		},
 		rukpakv1alpha1.SourceTypeGit: &Git{
 			Reader:          mgr.GetAPIReader(),
@@ -111,6 +126,11 @@ func NewDefaultUnpacker(mgr ctrl.Manager, namespace, provisionerName, unpackImag
 		rukpakv1alpha1.SourceTypeLocal: &Local{
 			Client: mgr.GetClient(),
 			reader: mgr.GetAPIReader(),
+		},
+		rukpakv1alpha1.SourceTypeUpload: &Upload{
+			baseDownloadURL: baseUploadManagerURL,
+			bearerToken:     mgr.GetConfig().BearerToken,
+			client:          http.Client{Timeout: uploadClientTimeout, Transport: httpTransport},
 		},
 	}), nil
 }

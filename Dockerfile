@@ -11,10 +11,9 @@ RUN make build
 
 FROM registry.ci.openshift.org/ocp/4.12:base
 
-COPY --from=builder /build/bin/plain /bin
-COPY --from=builder /build/bin/registry /bin
-COPY --from=builder /build/bin/unpack /bin
 COPY --from=builder /build/bin/core /bin
+COPY --from=builder /build/bin/unpack /bin
+COPY --from=builder /build/bin/webhooks /bin
 COPY --from=builder /build/bin/crdvalidator /bin
 USER 1001
 
@@ -23,3 +22,4 @@ LABEL io.k8s.display-name="OpenShift RukPak" \
       io.openshift.tags="openshift" \
       summary="This is a component of OpenShift Container Platform and manages the lifecycle of operators." \
       maintainer="Odin Team <aos-odin@redhat.com>"
+

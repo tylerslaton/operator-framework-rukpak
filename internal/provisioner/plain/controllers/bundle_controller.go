@@ -59,6 +59,7 @@ type BundleReconciler struct {
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundles/status,verbs=update;patch
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundles/finalizers,verbs=update
 //+kubebuilder:rbac:verbs=get,urls=/bundles/*
+//+kubebuilder:rbac:verbs=get,urls=/uploads/*
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=list;watch;create;delete
 //+kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
 //+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
@@ -271,6 +272,6 @@ func (r *BundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// The default unpacker creates Pod's ownerref'd to its bundle, so
 		// we need to watch pods to ensure we reconcile events coming from these
 		// pods.
-		Watches(&crsource.Kind{Type: &corev1.Pod{}}, util.MapOwneeToOwnerProvisionerHandler(context.TODO(), mgr.GetClient(), l, plain.ProvisionerID, &rukpakv1alpha1.Bundle{})).
+		Watches(&crsource.Kind{Type: &corev1.Pod{}}, util.MapOwneeToOwnerProvisionerHandler(context.Background(), mgr.GetClient(), l, plain.ProvisionerID, &rukpakv1alpha1.Bundle{})).
 		Complete(r)
 }
