@@ -11,9 +11,9 @@ RUN make build
 
 FROM registry.ci.openshift.org/ocp/4.12:base
 
-COPY --from=builder /build/bin/core /bin
-COPY --from=builder /build/bin/unpack /bin
-COPY --from=builder /build/bin/webhooks /bin
+COPY --from=builder /build/bin/core /
+COPY --from=builder /build/bin/unpack /
+COPY --from=builder /build/bin/webhooks /
 USER 1001
 
 LABEL io.k8s.display-name="OpenShift RukPak" \
