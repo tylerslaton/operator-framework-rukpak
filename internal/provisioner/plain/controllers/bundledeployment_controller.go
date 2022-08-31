@@ -49,19 +49,8 @@ import (
 	helmpredicate "github.com/operator-framework/rukpak/internal/helm-operator-plugins/predicate"
 	plain "github.com/operator-framework/rukpak/internal/provisioner/plain/types"
 	"github.com/operator-framework/rukpak/internal/storage"
-	updater "github.com/operator-framework/rukpak/internal/updater/bundle-deployment"
 	"github.com/operator-framework/rukpak/internal/util"
-)
-
-const (
-	maxGeneratedBundleLimit = 4
-)
-
-var (
-	// ErrMaxGeneratedLimit is the error returned by the BundleDeployment controller
-	// when the configured maximum number of Bundles that match a label selector
-	// has been reached.
-	ErrMaxGeneratedLimit = errors.New("reached the maximum generated Bundle limit")
+	updater "github.com/operator-framework/rukpak/pkg/updater/bundle-deployment"
 )
 
 // BundleDeploymentReconciler reconciles a BundleDeployment object
@@ -112,8 +101,9 @@ func (r *BundleDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			l.Error(err, "failed to update status")
 		}
 	}()
+	u.UpdateStatus(updater.EnsureObservedGeneration(bd.Generation))
 
-	bundle, allBundles, err := reconcileDesiredBundle(ctx, r.Client, bd)
+	bundle, allBundles, err := util.ReconcileDesiredBundle(ctx, r.Client, bd)
 	if err != nil {
 		u.UpdateStatus(
 			updater.EnsureCondition(metav1.Condition{
@@ -175,8 +165,8 @@ func (r *BundleDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err != nil {
 			u.UpdateStatus(
 				updater.EnsureCondition(metav1.Condition{
-					Type:    rukpakv1alpha1.TypeInvalidBundleContent,
-					Status:  metav1.ConditionTrue,
+					Type:    rukpakv1alpha1.TypeHasValidBundle,
+					Status:  metav1.ConditionFalse,
 					Reason:  rukpakv1alpha1.ReasonReadingContentFailed,
 					Message: err.Error(),
 				}))
@@ -325,57 +315,6 @@ func (r *BundleDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return ctrl.Result{}, nil
 }
 
-// reconcileDesiredBundle is responsible for checking whether the desired
-// Bundle resource that's specified in the BundleDeployment parameter's
-// spec.Template configuration is present on cluster, and if not, creates
-// a new Bundle resource matching that desired specification.
-func reconcileDesiredBundle(ctx context.Context, c client.Client, bd *rukpakv1alpha1.BundleDeployment) (*rukpakv1alpha1.Bundle, *rukpakv1alpha1.BundleList, error) {
-	// get the set of Bundle resources that already exist on cluster, and sort
-	// by metadata.CreationTimestamp in the case there's multiple Bundles
-	// that match the label selector.
-	existingBundles, err := util.GetBundlesForBundleDeploymentSelector(ctx, c, bd)
-	if err != nil {
-		return nil, nil, err
-	}
-	util.SortBundlesByCreation(existingBundles)
-
-	// check whether the BI controller has already reached the maximum
-	// generated Bundle limit to avoid hotlooping scenarios.
-	if len(existingBundles.Items) > maxGeneratedBundleLimit {
-		return nil, nil, ErrMaxGeneratedLimit
-	}
-
-	// check whether there's an existing Bundle that matches the desired Bundle template
-	// specified in the BI resource, and if not, generate a new Bundle that matches the template.
-	b := util.CheckExistingBundlesMatchesTemplate(existingBundles, bd.Spec.Template)
-	if b == nil {
-		controllerRef := metav1.NewControllerRef(bd, bd.GroupVersionKind())
-		hash := util.GenerateTemplateHash(bd.Spec.Template)
-
-		labels := bd.Spec.Template.Labels
-		if len(labels) == 0 {
-			labels = make(map[string]string)
-		}
-		labels[util.CoreOwnerKindKey] = rukpakv1alpha1.BundleDeploymentKind
-		labels[util.CoreOwnerNameKey] = bd.GetName()
-		labels[util.CoreBundleTemplateHashKey] = hash
-
-		b = &rukpakv1alpha1.Bundle{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:            util.GenerateBundleName(bd.GetName(), hash),
-				OwnerReferences: []metav1.OwnerReference{*controllerRef},
-				Labels:          labels,
-				Annotations:     bd.Spec.Template.Annotations,
-			},
-			Spec: bd.Spec.Template.Spec,
-		}
-		if err := c.Create(ctx, b); err != nil {
-			return nil, nil, err
-		}
-	}
-	return b, existingBundles, err
-}
-
 // reconcileOldBundles is responsible for garbage collecting any Bundles
 // that no longer match the desired Bundle template.
 func (r *BundleDeploymentReconciler) reconcileOldBundles(ctx context.Context, currBundle *rukpakv1alpha1.Bundle, allBundles *rukpakv1alpha1.BundleList) error {
@@ -483,8 +422,12 @@ func isResourceNotFoundErr(err error) bool {
 // SetupWithManager sets up the controller with the Manager.
 func (r *BundleDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	controller, err := ctrl.NewControllerManagedBy(mgr).
-		For(&rukpakv1alpha1.BundleDeployment{}, builder.WithPredicates(util.BundleDeploymentProvisionerFilter(plain.ProvisionerID))).
-		Watches(&source.Kind{Type: &rukpakv1alpha1.Bundle{}}, handler.EnqueueRequestsFromMapFunc(util.MapBundleToBundleDeploymentHandler(context.Background(), mgr.GetClient(), mgr.GetLogger()))).
+		For(&rukpakv1alpha1.BundleDeployment{}, builder.WithPredicates(
+			util.BundleDeploymentProvisionerFilter(plain.ProvisionerID)),
+		).
+		Watches(&source.Kind{Type: &rukpakv1alpha1.Bundle{}}, handler.EnqueueRequestsFromMapFunc(
+			util.MapBundleToBundleDeploymentHandler(context.Background(), mgr.GetClient(), mgr.GetLogger(), plain.ProvisionerID)),
+		).
 		Build(r)
 	if err != nil {
 		return err

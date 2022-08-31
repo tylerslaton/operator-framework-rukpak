@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -306,7 +305,7 @@ var _ = Describe("plain provisioner bundle", func() {
 			Eventually(func() bool {
 				pod := &corev1.Pod{}
 				if err := c.Get(ctx, types.NamespacedName{
-					Name:      util.PodName(bundle.GetName()),
+					Name:      bundle.GetName(),
 					Namespace: defaultSystemNamespace,
 				}, pod); err != nil {
 					return false
@@ -761,7 +760,7 @@ var _ = Describe("plain provisioner bundle", func() {
 				if info.IsDir() {
 					return nil
 				}
-				c, err := ioutil.ReadFile(path)
+				c, err := os.ReadFile(path)
 				if err != nil {
 					return err
 				}
@@ -899,7 +898,7 @@ var _ = Describe("plain provisioner bundle", func() {
 				if info.IsDir() {
 					return nil
 				}
-				c, err := ioutil.ReadFile(path)
+				c, err := os.ReadFile(path)
 				if err != nil {
 					return err
 				}
