@@ -21,6 +21,7 @@ REGISTRY_NAMESPACE=rukpak-e2e
 DNS_NAME=$(REGISTRY_NAME).$(REGISTRY_NAMESPACE).svc.cluster.local
 
 CONTAINER_RUNTIME ?= docker
+KUBECTL ?= kubectl
 
 # kernel-style V=1 build verbosity
 ifeq ("$(origin V)", "command line")
@@ -59,9 +60,6 @@ lint: golangci-lint ## Run golangci linter
 tidy: ## Update dependencies
 	$(Q)go mod tidy
 
-fmt: ## Format Go code
-	$(Q)go fmt ./...
-
 clean: ## Remove binaries and test artifacts
 	@rm -rf bin
 
@@ -75,7 +73,7 @@ generate: controller-gen ## Generate code and manifests
 		paths=./internal/uploadmgr/... \
 			output:stdout > ./manifests/core/resources/cluster_role.yaml
 
-verify: tidy fmt generate ## Verify the current code generation and lint
+verify: tidy generate ## Verify the current code generation and lint
 	git diff --exit-code
 
 ###########
@@ -128,16 +126,8 @@ install-manifests:
 wait:
 	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/core --timeout=60s
 	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-webhooks --timeout=60s
-	kubectl wait --for=condition=Available --namespace=crdvalidator-system deployment/crd-validation-webhook --timeout=60s
 
 run: build-container kind-cluster kind-load install ## Build image, stop/start a local kind cluster, and run operator in that cluster
-
-cert-mgr: ## Install the certification manager
-	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MGR_VERSION)/cert-manager.yaml
-	kubectl wait --for=condition=Available --namespace=cert-manager deployment/cert-manager-webhook --timeout=60s
-
-uninstall: ## Remove all rukpak resources from the cluster
-	kubectl delete -k manifests
 
 ##################
 # Build and Load #
@@ -146,18 +136,24 @@ uninstall: ## Remove all rukpak resources from the cluster
 
 ##@ build/load:
 
-# Binary builds
-BINARIES=core unpack webhooks crdvalidator rukpakctl
+BINARIES=core helm unpack webhooks crdvalidator rukpakctl
+LINUX_BINARIES=$(join $(addprefix linux/,$(BINARIES)), )
+
+.PHONY: build $(BINARIES) $(LINUX_BINARIES) build-container kind-load kind-load-bundles kind-cluster registry-load-bundles
+
 VERSION_FLAGS=-ldflags "-X $(VERSION_PATH).GitCommit=$(GIT_COMMIT)"
+
+# Binary builds
 build: $(BINARIES)
+
+$(LINUX_BINARIES):
+	CGO_ENABLED=0 GOOS=linux go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$(notdir $@)
 
 $(BINARIES):
 	CGO_ENABLED=0 go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$@
 
-build-container: export GOOS=linux
-build-container: BIN_DIR:=$(BIN_DIR)/$(GOOS)
-build-container: build ## Builds provisioner container image locally
-	$(CONTAINER_RUNTIME) build -f Dockerfile -t $(IMAGE) $(BIN_DIR)
+build-container: $(LINUX_BINARIES) ## Builds provisioner container image locally
+	$(CONTAINER_RUNTIME) build -f Dockerfile -t $(IMAGE) $(BIN_DIR)/linux
 
 kind-load-bundles: kind ## Load the e2e testdata container images into a kind cluster
 	$(CONTAINER_RUNTIME) build $(TESTDATA_DIR)/bundles/plain-v0/valid -t testdata/bundles/plain-v0:valid
@@ -202,7 +198,7 @@ release: goreleaser substitute ## Run goreleaser
 
 quickstart: VERSION ?= $(shell git describe --abbrev=0 --tags)
 quickstart: generate ## Generate the installation release manifests
-	kubectl kustomize manifests | sed "s/:latest/:$(VERSION)/g" > rukpak.yaml
+	$(KUBECTL) kustomize manifests | sed "s/:latest/:$(VERSION)/g" > rukpak.yaml
 
 ################
 # Hack / Tools #

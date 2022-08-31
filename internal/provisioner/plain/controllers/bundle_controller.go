@@ -42,8 +42,8 @@ import (
 	plain "github.com/operator-framework/rukpak/internal/provisioner/plain/types"
 	"github.com/operator-framework/rukpak/internal/source"
 	"github.com/operator-framework/rukpak/internal/storage"
-	updater "github.com/operator-framework/rukpak/internal/updater/bundle"
 	"github.com/operator-framework/rukpak/internal/util"
+	updater "github.com/operator-framework/rukpak/pkg/updater/bundle"
 )
 
 // BundleReconciler reconciles a Bundle object
@@ -58,8 +58,7 @@ type BundleReconciler struct {
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundles,verbs=list;watch;update;patch
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundles/status,verbs=update;patch
 //+kubebuilder:rbac:groups=core.rukpak.io,resources=bundles/finalizers,verbs=update
-//+kubebuilder:rbac:verbs=get,urls=/bundles/*
-//+kubebuilder:rbac:verbs=get,urls=/uploads/*
+//+kubebuilder:rbac:verbs=get,urls=/bundles/*;/uploads/*
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=list;watch;create;delete
 //+kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
 //+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
