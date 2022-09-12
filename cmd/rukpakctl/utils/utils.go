@@ -1,10 +1,12 @@
 /*
 Copyright © 2022 NAME HERE <EMAIL ADDRESS>
+
 */
 package utils
 
 import (
 	"context"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -23,7 +25,7 @@ func CreateConfigmap(ctx context.Context, core typedv1.CoreV1Interface, name, di
 		if info.IsDir() {
 			return nil
 		}
-		c, err := os.ReadFile(path)
+		c, err := ioutil.ReadFile(path)
 		if err != nil {
 			return err
 		}
