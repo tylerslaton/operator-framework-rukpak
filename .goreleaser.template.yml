@@ -140,5 +140,3 @@ release:
     kubectl apply -f https://github.com/operator-framework/rukpak/releases/download/{{ .Tag }}/rukpak.yaml
     kubectl wait --for=condition=Available --namespace=rukpak-system deployment/core --timeout=60s
     kubectl wait --for=condition=Available --namespace=rukpak-system deployment/rukpak-webhooks --timeout=60s
-    kubectl wait --for=condition=Available --namespace=crdvalidator-system deployment/crd-validation-webhook --timeout=60s
-    ```
