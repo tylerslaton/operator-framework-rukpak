@@ -95,8 +95,9 @@ test-unit: setup-envtest ## Run the unit tests
 	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test -count=1 -short $(UNIT_TEST_DIRS)
 
 FOCUS := $(if $(TEST),-v -focus "$(TEST)")
+E2E_FLAGS ?= ""
 test-e2e: ginkgo ## Run the e2e tests
-	$(GINKGO) -trace -progress $(FOCUS) test/e2e
+	$(GINKGO) --tags $(GO_BUILD_TAGS) $(E2E_FLAGS) -trace -progress $(FOCUS) test/e2e
 
 e2e: KIND_CLUSTER_NAME=rukpak-e2e
 e2e: run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
