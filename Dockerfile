@@ -1,23 +1,12 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.18-openshift-4.12 AS builder
+FROM gcr.io/distroless/static:debug-nonroot
 
-# copy just enough of the git repo to parse HEAD, used to record version in OLM binaries
-COPY .git/HEAD .git/HEAD
-COPY .git/refs/heads/. .git/refs/heads
-RUN mkdir -p .git/objects
+WORKDIR /
 
-WORKDIR /build
-COPY . .
-RUN make build
+COPY helm helm
+COPY core core
+COPY unpack unpack
+COPY webhooks webhooks
+COPY crdvalidator crdvalidator
+COPY rukpakctl rukpakctl
 
-FROM registry.ci.openshift.org/ocp/4.12:base
-
-COPY --from=builder /build/bin/core /
-COPY --from=builder /build/bin/unpack /
-COPY --from=builder /build/bin/webhooks /
-USER 1001
-
-LABEL io.k8s.display-name="OpenShift RukPak" \
-      io.k8s.description="This is a component of OpenShift Container Platform and manages the lifecycle of operators." \
-      io.openshift.tags="openshift" \
-      summary="This is a component of OpenShift Container Platform and manages the lifecycle of operators." \
-      maintainer="Odin Team <aos-odin@redhat.com>"
+EXPOSE 8080

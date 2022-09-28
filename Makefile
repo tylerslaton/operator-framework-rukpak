@@ -3,9 +3,9 @@
 ###########################
 ORG := github.com/operator-framework
 PKG := $(ORG)/rukpak
-GO_INSTALL_OPTS ?= "-mod=readonly"
 export IMAGE_REPO ?= quay.io/operator-framework/rukpak
 export IMAGE_TAG ?= latest
+export GO_BUILD_TAGS ?= upstream
 IMAGE?=$(IMAGE_REPO):$(IMAGE_TAG)
 KIND_CLUSTER_NAME ?= rukpak
 BIN_DIR := bin
@@ -13,7 +13,7 @@ TESTDATA_DIR := testdata
 VERSION_PATH := $(PKG)/internal/version
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
 PKGS = $(shell go list ./...)
-export CERT_MGR_VERSION ?= v1.7.1
+export CERT_MGR_VERSION ?= v1.9.0
 RUKPAK_NAMESPACE ?= rukpak-system
 
 REGISTRY_NAME="docker-registry"
@@ -53,12 +53,15 @@ help: ## Show this help screen
 ##@ code management:
 
 lint: golangci-lint ## Run golangci linter
-	# Set the golangci-lint cache directory to a directory that's
-	# writable in downstream CI.
-	GOLANGCI_LINT_CACHE=/tmp/golangci-cache $(GOLANGCI_LINT) run
+	$(Q)$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 tidy: ## Update dependencies
 	$(Q)go mod tidy
+	$(Q)(cd $(TOOLS_DIR) && go mod tidy)
+
+fmt: ## Format Go code
+	$(Q)go fmt ./...
+	$(Q)(cd $(TOOLS_DIR) && go fmt $$(go list -tags=tools ./...))
 
 clean: ## Remove binaries and test artifacts
 	@rm -rf bin
@@ -72,8 +75,9 @@ generate: controller-gen ## Generate code and manifests
 		paths=./internal/provisioner/registry/... \
 		paths=./internal/uploadmgr/... \
 			output:stdout > ./manifests/core/resources/cluster_role.yaml
+	$(Q)$(CONTROLLER_GEN) rbac:roleName=helm-provisioner-admin paths=./internal/provisioner/helm/... output:stdout > ./manifests/provisioners/helm/resources/cluster_role.yaml
 
-verify: tidy generate ## Verify the current code generation and lint
+verify: tidy fmt generate ## Verify the current code generation and lint
 	git diff --exit-code
 
 ###########
@@ -85,21 +89,18 @@ verify: tidy generate ## Verify the current code generation and lint
 
 test: test-unit test-e2e ## Run the tests
 
-.PHONY: setup-envtest
-setup-envtest: envtest
-	$(eval KUBEBUILDER_ASSETS := "$(shell $(ENVTEST) use $(ENVTEST_VERSION) -p path --bin-dir $(LOCALBIN))")
-
 ENVTEST_VERSION = $(shell go list -m k8s.io/client-go | cut -d" " -f2 | sed 's/^v0\.\([[:digit:]]\{1,\}\)\.[[:digit:]]\{1,\}$$/1.\1.x/')
 UNIT_TEST_DIRS=$(shell go list ./... | grep -v /test/)
 test-unit: setup-envtest ## Run the unit tests
-	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test -count=1 -short $(UNIT_TEST_DIRS)
+	eval $$($(SETUP_ENVTEST) use -p env $(ENVTEST_VERSION)) && go test -tags $(GO_BUILD_TAGS) -count=1 -short $(UNIT_TEST_DIRS)
 
 FOCUS := $(if $(TEST),-v -focus "$(TEST)")
+E2E_FLAGS ?= ""
 test-e2e: ginkgo ## Run the e2e tests
-	$(GINKGO) -trace -progress $(FOCUS) test/e2e
+	$(GINKGO) --tags $(GO_BUILD_TAGS) $(E2E_FLAGS) -trace -progress $(FOCUS) test/e2e
 
 e2e: KIND_CLUSTER_NAME=rukpak-e2e
-e2e: run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
+e2e: rukpakctl run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
 
 kind-cluster: kind kind-cluster-cleanup ## Standup a kind cluster
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
@@ -121,18 +122,26 @@ image-registry: ## Setup in-cluster image registry
 install: generate cert-mgr install-manifests wait ## Install rukpak
 
 install-manifests:
-	kubectl apply -k manifests
+	$(KUBECTL) apply -k manifests
 
 wait:
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/core --timeout=60s
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-webhooks --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/core --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-webhooks --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/helm-provisioner --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=crdvalidator-system deployment/crd-validation-webhook --timeout=60s
 
 run: build-container kind-cluster kind-load install ## Build image, stop/start a local kind cluster, and run operator in that cluster
+
+cert-mgr: ## Install the certification manager
+	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MGR_VERSION)/cert-manager.yaml
+	$(KUBECTL) wait --for=condition=Available --namespace=cert-manager deployment/cert-manager-webhook --timeout=60s
+
+uninstall: ## Remove all rukpak resources from the cluster
+	$(KUBECTL) delete -k manifests
 
 ##################
 # Build and Load #
 ##################
-.PHONY: build plain unpack core rukpakctl build-container kind-load kind-load-bundles kind-cluster registry-load-bundles
 
 ##@ build/load:
 
@@ -147,10 +156,10 @@ VERSION_FLAGS=-ldflags "-X $(VERSION_PATH).GitCommit=$(GIT_COMMIT)"
 build: $(BINARIES)
 
 $(LINUX_BINARIES):
-	CGO_ENABLED=0 GOOS=linux go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$(notdir $@)
+	CGO_ENABLED=0 GOOS=linux go build -tags $(GO_BUILD_TAGS) $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$(notdir $@)
 
 $(BINARIES):
-	CGO_ENABLED=0 go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$@
+	CGO_ENABLED=0 go build -tags $(GO_BUILD_TAGS) $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$@
 
 build-container: $(LINUX_BINARIES) ## Builds provisioner container image locally
 	$(CONTAINER_RUNTIME) build -f Dockerfile -t $(IMAGE) $(BIN_DIR)/linux
@@ -205,56 +214,36 @@ quickstart: generate ## Generate the installation release manifests
 ################
 # Hack / Tools #
 ################
+TOOLS_DIR := hack/tools
+TOOLS_BIN_DIR := $(TOOLS_DIR)/bin
 
-## Location to install dependencies to
-LOCALBIN ?= $(shell pwd)/bin
-$(LOCALBIN):
-	mkdir -p $(LOCALBIN)
+##@ hack/tools:
 
-## Tool Binaries
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-ENVTEST ?= $(LOCALBIN)/setup-envtest
-GINKGO ?= $(LOCALBIN)/ginkgo
-GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
-KIND ?= $(LOCALBIN)/kind
+.PHONY: golangci-lint ginkgo controller-gen goreleaser kind
 
-## Tool Versions
-KUSTOMIZE_VERSION ?= v3.8.7
-CONTROLLER_TOOLS_VERSION ?= v0.9.0
-SETUP_ENVTEST_VERSION ?= latest
-GINKGO_VERSION ?= v2.1.4
-GOLANGCI_LINT_VERSION ?= v1.46.0
-KIND_VERSION ?= v0.14.0
+GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/golangci-lint)
+GINKGO := $(abspath $(TOOLS_BIN_DIR)/ginkgo)
+CONTROLLER_GEN := $(abspath $(TOOLS_BIN_DIR)/controller-gen)
+SETUP_ENVTEST := $(abspath $(TOOLS_BIN_DIR)/setup-envtest)
+GORELEASER := $(abspath $(TOOLS_BIN_DIR)/goreleaser)
+KIND := $(abspath $(TOOLS_BIN_DIR)/kind)
 
-KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
-	rm -f $(KUSTOMIZE)
-	curl -s $(KUSTOMIZE_INSTALL_SCRIPT) | bash -s -- $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN)
+controller-gen: $(CONTROLLER_GEN) ## Build a local copy of controller-gen
+ginkgo: $(GINKGO) ## Build a local copy of ginkgo
+golangci-lint: $(GOLANGCI_LINT) ## Build a local copy of golangci-lint
+setup-envtest: $(SETUP_ENVTEST) ## Build a local copy of envtest
+goreleaser: $(GORELEASER) ## Builds a local copy of goreleaser
+kind: $(KIND) ## Builds a local copy of kind
 
-.PHONY: controller-gen
-controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) go install $(GO_INSTALL_OPTS) sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
-
-.PHONY: envtest
-envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
-$(ENVTEST): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) go install $(GO_INSTALL_OPTS) sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
-
-.PHONY: ginkgo
-ginkgo: $(GINKGO)
-$(GINKGO): $(LOCALBIN) ## Download ginkgo locally if necessary.
-	GOBIN=$(LOCALBIN) go install $(GO_INSTALL_OPTS) github.com/onsi/ginkgo/v2/ginkgo@$(GINKGO_VERSION)
-
-.PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT)
-$(GOLANGCI_LINT): $(LOCALBIN) ## Download golangci-lint locally if necessary.
-	GOBIN=$(LOCALBIN) go install $(GO_INSTALL_OPTS) github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-
-.PHONY: kind
-kind: $(KIND) ## Download kind locally if necessary.
-$(KIND): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) go install $(GO_INSTALL_OPTS) sigs.k8s.io/kind@$(KIND_VERSION)
+$(CONTROLLER_GEN): $(TOOLS_DIR)/go.mod # Build controller-gen from tools folder.
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/controller-gen sigs.k8s.io/controller-tools/cmd/controller-gen
+$(GINKGO): $(TOOLS_DIR)/go.mod # Build ginkgo from tools folder.
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/ginkgo github.com/onsi/ginkgo/v2/ginkgo
+$(GOLANGCI_LINT): $(TOOLS_DIR)/go.mod # Build golangci-lint from tools folder.
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint
+$(SETUP_ENVTEST): $(TOOLS_DIR)/go.mod # Build setup-envtest from tools folder.
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/setup-envtest sigs.k8s.io/controller-runtime/tools/setup-envtest
+$(GORELEASER): $(TOOLS_DIR)/go.mod # Build goreleaser from tools folder.
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/goreleaser github.com/goreleaser/goreleaser
+$(KIND): $(TOOLS_DIR)/go.mod
+	cd $(TOOLS_DIR); go build -tags=tools -o $(BIN_DIR)/kind sigs.k8s.io/kind
