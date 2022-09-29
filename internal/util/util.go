@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"io/ioutil"
 	"os"
 	"sort"
 	"time"
@@ -171,16 +170,6 @@ func MapOwneeToOwnerProvisionerHandler(ctx context.Context, cl client.Client, lo
 	})
 }
 
-func MapBundleDeploymentToBundles(ctx context.Context, c client.Client, bd rukpakv1alpha1.BundleDeployment) *rukpakv1alpha1.BundleList {
-	bundles := &rukpakv1alpha1.BundleList{}
-	if err := c.List(ctx, bundles, &client.ListOptions{
-		LabelSelector: NewBundleDeploymentLabelSelector(&bd),
-	}); err != nil {
-		return nil
-	}
-	return bundles
-}
-
 // MapBundleToBundleDeployment is responsible for finding the BundleDeployment resource
 // that's managing this Bundle in the cluster. In the case that this Bundle is a standalone
 // resource, then no BundleDeployment will be returned as static creation of Bundle
@@ -301,7 +290,7 @@ func SortBundlesByCreation(bundles *rukpakv1alpha1.BundleList) {
 // automatically for Pods at runtime. If that file doesn't exist, then
 // return the @defaultNamespace namespace parameter.
 func PodNamespace(defaultNamespace string) string {
-	namespace, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	namespace, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil {
 		return defaultNamespace
 	}

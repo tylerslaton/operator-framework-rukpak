@@ -6,6 +6,7 @@ PKG := $(ORG)/rukpak
 GO_INSTALL_OPTS ?= "-mod=readonly"
 export IMAGE_REPO ?= quay.io/operator-framework/rukpak
 export IMAGE_TAG ?= latest
+export GO_BUILD_TAGS ?= downstream
 IMAGE?=$(IMAGE_REPO):$(IMAGE_TAG)
 KIND_CLUSTER_NAME ?= rukpak
 BIN_DIR := bin
@@ -13,7 +14,7 @@ TESTDATA_DIR := testdata
 VERSION_PATH := $(PKG)/internal/version
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
 PKGS = $(shell go list ./...)
-export CERT_MGR_VERSION ?= v1.7.1
+export CERT_MGR_VERSION ?= v1.9.0
 RUKPAK_NAMESPACE ?= rukpak-system
 
 REGISTRY_NAME="docker-registry"
@@ -55,10 +56,13 @@ help: ## Show this help screen
 lint: golangci-lint ## Run golangci linter
 	# Set the golangci-lint cache directory to a directory that's
 	# writable in downstream CI.
-	GOLANGCI_LINT_CACHE=/tmp/golangci-cache $(GOLANGCI_LINT) run
+	GOLANGCI_LINT_CACHE=/tmp/golangci-cache $(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 tidy: ## Update dependencies
 	$(Q)go mod tidy
+
+fmt: ## Format Go code
+	$(Q)go fmt ./...
 
 clean: ## Remove binaries and test artifacts
 	@rm -rf bin
@@ -72,8 +76,9 @@ generate: controller-gen ## Generate code and manifests
 		paths=./internal/provisioner/registry/... \
 		paths=./internal/uploadmgr/... \
 			output:stdout > ./manifests/core/resources/cluster_role.yaml
+	$(Q)$(CONTROLLER_GEN) rbac:roleName=helm-provisioner-admin paths=./internal/provisioner/helm/... output:stdout > ./manifests/provisioners/helm/resources/cluster_role.yaml
 
-verify: tidy generate ## Verify the current code generation and lint
+verify: tidy fmt generate ## Verify the current code generation and lint
 	git diff --exit-code
 
 ###########
@@ -92,14 +97,15 @@ setup-envtest: envtest
 ENVTEST_VERSION = $(shell go list -m k8s.io/client-go | cut -d" " -f2 | sed 's/^v0\.\([[:digit:]]\{1,\}\)\.[[:digit:]]\{1,\}$$/1.\1.x/')
 UNIT_TEST_DIRS=$(shell go list ./... | grep -v /test/)
 test-unit: setup-envtest ## Run the unit tests
-	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test -count=1 -short $(UNIT_TEST_DIRS)
+	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test -tags $(GO_BUILD_TAGS) -count=1 -short $(UNIT_TEST_DIRS)
 
 FOCUS := $(if $(TEST),-v -focus "$(TEST)")
+E2E_FLAGS ?= ""
 test-e2e: ginkgo ## Run the e2e tests
-	$(GINKGO) -trace -progress $(FOCUS) test/e2e
+	$(GINKGO) --tags $(GO_BUILD_TAGS) $(E2E_FLAGS) -trace -progress $(FOCUS) test/e2e
 
 e2e: KIND_CLUSTER_NAME=rukpak-e2e
-e2e: run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
+e2e: rukpakctl run image-registry kind-load-bundles registry-load-bundles test-e2e kind-cluster-cleanup ## Run e2e tests against an ephemeral kind cluster
 
 kind-cluster: kind kind-cluster-cleanup ## Standup a kind cluster
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
@@ -121,18 +127,25 @@ image-registry: ## Setup in-cluster image registry
 install: generate cert-mgr install-manifests wait ## Install rukpak
 
 install-manifests:
-	kubectl apply -k manifests
+	$(KUBECTL) apply -k manifests
 
 wait:
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/core --timeout=60s
-	kubectl wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-webhooks --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/core --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/rukpak-webhooks --timeout=60s
+	$(KUBECTL) wait --for=condition=Available --namespace=$(RUKPAK_NAMESPACE) deployment/helm-provisioner --timeout=60s
 
 run: build-container kind-cluster kind-load install ## Build image, stop/start a local kind cluster, and run operator in that cluster
+
+cert-mgr: ## Install the certification manager
+	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MGR_VERSION)/cert-manager.yaml
+	$(KUBECTL) wait --for=condition=Available --namespace=cert-manager deployment/cert-manager-webhook --timeout=60s
+
+uninstall: ## Remove all rukpak resources from the cluster
+	$(KUBECTL) delete -k manifests
 
 ##################
 # Build and Load #
 ##################
-.PHONY: build plain unpack core rukpakctl build-container kind-load kind-load-bundles kind-cluster registry-load-bundles
 
 ##@ build/load:
 
@@ -147,10 +160,10 @@ VERSION_FLAGS=-ldflags "-X $(VERSION_PATH).GitCommit=$(GIT_COMMIT)"
 build: $(BINARIES)
 
 $(LINUX_BINARIES):
-	CGO_ENABLED=0 GOOS=linux go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$(notdir $@)
+	CGO_ENABLED=0 GOOS=linux go build -tags $(GO_BUILD_TAGS) $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$(notdir $@)
 
 $(BINARIES):
-	CGO_ENABLED=0 go build $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$@
+	CGO_ENABLED=0 go build -tags $(GO_BUILD_TAGS) $(VERSION_FLAGS) -o $(BIN_DIR)/$@ ./cmd/$@
 
 build-container: $(LINUX_BINARIES) ## Builds provisioner container image locally
 	$(CONTAINER_RUNTIME) build -f Dockerfile -t $(IMAGE) $(BIN_DIR)/linux
